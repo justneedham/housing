@@ -95,3 +95,118 @@ housing['bedrooms_per_room'] = housing['total_bedrooms']/housing['total_rooms']
 housing['population_per_household'] = housing['population']/housing['households']
 corr_matrix = housing.corr()
 print(corr_matrix['median_house_value'].sort_values(ascending=False))
+
+# Data Cleaning
+#%%
+housing = strat_train_set.drop('median_house_value', axis=1)
+housing_labels = strat_train_set['median_house_value'].copy()
+
+# housing.dropna(subset=['total_bedrooms'])  # Get rid of incomplete rows
+# housing.drop('total_bedrooms', axis=1)  # Get rid of entire attribute for dataframe
+median = housing['total_bedrooms'].median()  # Fill with median
+housing['total_bedrooms'].fillna(median, inplace=True)
+
+from sklearn.impute import SimpleImputer
+imputer = SimpleImputer(strategy='median')
+housing_num = housing.drop('ocean_proximity', axis=1)
+imputer.fit(housing_num)
+print(imputer.statistics_)
+print(housing_num.median().values)
+
+X = imputer.transform(housing_num)
+housing_tr = pd.DataFrame(X, columns=housing_num.columns)
+
+# Generally text attributes need to be converted to numbers for algorithms
+housing_cat = housing['ocean_proximity']
+print(housing_cat.head(10))
+housing_cat_encoded, housing_categories = housing_cat.factorize()
+print(housing_cat_encoded[:10])
+print(housing_categories)
+
+# One-Hot Encoding
+from sklearn.preprocessing import OneHotEncoder
+encoder = OneHotEncoder()
+housing_cat_hot = encoder.fit_transform(housing_cat_encoded.reshape(-1, 1))
+print(housing_cat_hot.toarray())
+
+
+# Pipelines
+#%%
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.preprocessing import StandardScaler
+from helpers.transformers import DataFrameSelector, CombinedAttributesAdder
+
+housing_num = housing.drop('ocean_proximity', axis=1)
+num_attributes = list(housing_num)
+cat_attributes = ['ocean_proximity']
+
+num_pipeline = Pipeline([
+    ('selector', DataFrameSelector(num_attributes)),
+    ('imputer', SimpleImputer(strategy='median')),
+    ('attribs_adder', CombinedAttributesAdder()),
+    ('std_scaler', StandardScaler())
+])
+
+cat_pipeline = Pipeline([
+    ('selector', DataFrameSelector(cat_attributes)),
+    ('cat_encoder', OneHotEncoder())
+])
+
+full_pipeline = FeatureUnion(transformer_list=[
+    ('num_pipeline', num_pipeline),
+    ('cat_pipeline', cat_pipeline)
+])
+
+cat_prepared = cat_pipeline.fit_transform(housing)
+num_prepared = num_pipeline.fit_transform(housing)
+housing_prepared = full_pipeline.fit_transform(housing)
+
+print(cat_prepared.toarray())
+print(cat_prepared.shape)
+
+print(num_prepared)
+print(num_prepared.shape)
+
+
+# Linear Regression
+#%%
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+
+lin_reg = LinearRegression()
+lin_reg.fit(housing_prepared, housing_labels)
+
+some_data = housing.iloc[:5]
+some_labels = housing_labels.iloc[:5]
+some_data_prepared = full_pipeline.transform(some_data)
+print('Predictions:', lin_reg.predict(some_data_prepared))
+print('Labels:', list(some_labels))
+
+housing_predictions = lin_reg.predict(housing_prepared)
+lin_mse = mean_squared_error(housing_labels, housing_predictions)
+lin_rmse = np.sqrt(lin_mse)
+print('RMSE: ', lin_rmse)
+
+# Decision Tree Regressor
+#%%
+from sklearn.tree import DecisionTreeRegressor
+
+tree_reg = DecisionTreeRegressor()
+tree_reg.fit(housing_prepared, housing_labels)
+housing_predictions = tree_reg.predict(housing_prepared)
+tree_mse = mean_squared_error(housing_labels, housing_predictions)
+tree_rmse = np.sqrt(tree_mse)
+print('RMSE: ', tree_rmse)
+
+# Cross Validation
+#%%
+from sklearn.model_selection import cross_val_score
+scores = cross_val_score(tree_reg, housing_prepared, housing_labels, scoring='neg_mean_squared_error', cv=10)
+tree_rmse_scores = np.sqrt(-scores)
+
+def display(scores):
+    print('Scores: ', scores)
+    print('Mean: ', scores.mean())
+    print('Standard Deviation: ', scores.std())
+
+display(tree_rmse_scores)
